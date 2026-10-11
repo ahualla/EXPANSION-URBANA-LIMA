@@ -1,7 +1,3 @@
-```python
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
 Backend Flask del Geoportal de Expansión Urbana de Lima.
 
