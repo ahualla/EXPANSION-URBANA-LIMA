@@ -1,18 +1,7 @@
 
+
 #!/usr/bin/env python3
-"""Genera datos de expansión urbana de Lima usando Google Earth Engine.
-
-Entradas:
-    py/make_data.py (define DIST, YEARS, D, etc.)
-
-Salidas:
-    data/expansion_gee.json
-    data/raster_AAAA.png
-
-Variables de entorno en Render:
-    GEE_PROJECT_ID=geoportal-gee-peru
-    GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/gee-service-account.json
-"""
+"""Genera estadísticas y mapas históricos de expansión urbana de Lima."""
 
 import json
 import os
@@ -28,45 +17,55 @@ sys.path.insert(0, str(ROOT / "py"))
 from make_data import D, DIST, YEARS, geojson_rings, voronoi_rings
 
 PROJECT = os.environ.get("GEE_PROJECT_ID", "geoportal-gee-peru")
-KEY_FILE = os.environ.get(
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "/etc/secrets/gee-service-account.json",
-)
-SERVICE_ACCOUNT = os.environ.get("GEE_SERVICE_ACCOUNT")
 
-# Extensión geográfica del área de análisis: Lima y Callao.
-BOUNDS = [-77.25, -12.58, -76.55, -11.55]
+KEY_FILE = os.environ.get(
+    "GEE_SERVICE_ACCOUNT_FILE",
+    os.environ.get(
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "/etc/secrets/gee-service-account.json",
+    ),
+)
+
+SERVICE_ACCOUNT = os.environ.get(
+    "GEE_SERVICE_ACCOUNT_EMAIL",
+    os.environ.get("GEE_SERVICE_ACCOUNT"),
+)
 
 COLLECTION_ID = "JRC/GHSL/P2023A/GHS_BUILT_S"
 
+# Extensión de Lima y Callao: [oeste, sur, este, norte].
+BOUNDS = [-77.25, -12.58, -76.55, -11.55]
+
+PALETTE = ["ffe9a8", "fdae61", "e8503a", "7f0f2a"]
+
 
 def initialize_gee():
-    """Inicializa Earth Engine usando las credenciales de Render."""
-    if not Path(KEY_FILE).is_file():
+    """Inicializa Earth Engine con la cuenta de servicio."""
+    key_path = Path(KEY_FILE)
+
+    if not key_path.is_file():
         raise FileNotFoundError(
-            f"No se encontró el archivo de credenciales: {KEY_FILE}. "
-            "Comprueba la configuración Secret Files de Render."
+            f"No existe el archivo de credenciales: {key_path}"
         )
 
-    import json as json_module
+    with key_path.open("r", encoding="utf-8") as file:
+        key_data = json.load(file)
 
-    with open(KEY_FILE, "r", encoding="utf-8") as f:
-        credentials_data = json_module.load(f)
+    email = SERVICE_ACCOUNT or key_data.get("client_email")
 
-    email = SERVICE_ACCOUNT or credentials_data.get("client_email")
     if not email:
         raise RuntimeError(
-            "No se encontró client_email en el archivo de credenciales."
+            "No se encontró el correo de la cuenta de servicio."
         )
 
-    credentials = ee.ServiceAccountCredentials(email, KEY_FILE)
+    credentials = ee.ServiceAccountCredentials(email, str(key_path))
     ee.Initialize(credentials, project=PROJECT)
 
-    print(f"Earth Engine conectado. Proyecto: {PROJECT}")
+    print(f"Earth Engine conectado: {PROJECT}")
 
 
 def build_feature_collection():
-    """Construye los polígonos de análisis por distrito."""
+    """Crea la colección de polígonos distritales."""
     rings = {**voronoi_rings(), **geojson_rings()}
     features = []
 
@@ -75,28 +74,84 @@ def build_feature_collection():
         district_rings = rings.get(name)
 
         if not district_rings:
-            print(f"Aviso: sin geometría para {name}; se omite.")
-            continue
+            raise ValueError(
+                f"No se encontró geometría para el distrito: {name}"
+            )
 
         polygons = []
+
         for ring in district_rings:
-            # Los anillos del archivo de origen están en [latitud, longitud].
+            # El código original de make_data.py almacena [lat, lon].
+            # Earth Engine requiere [lon, lat].
             coordinates = [[lon, lat] for lat, lon in ring]
-            if len(coordinates) >= 3:
-                polygons.append([coordinates])
 
-        if not polygons:
-            continue
+            if len(coordinates) < 4:
+                raise ValueError(
+                    f"Anillo incompleto para el distrito {name}"
+                )
 
-        geometry = ee.Geometry.MultiPolygon(polygons, None, False)
+            polygons.append([coordinates])
+
+        geometry = ee.Geometry.MultiPolygon(
+            polygons,
+            proj="EPSG:4326",
+            geodesic=False,
+        )
+
         features.append(
             ee.Feature(geometry, {"name": name})
         )
 
-    if not features:
-        raise RuntimeError("No se pudieron crear los polígonos de análisis.")
-
     return ee.FeatureCollection(features)
+
+
+def get_year_image(year):
+    """Carga la imagen GHSL correspondiente a una época concreta."""
+    image_id = f"{COLLECTION_ID}/{year}"
+    image = ee.Image(image_id)
+
+    # Comprueba que la imagen y su banda se pueden consultar.
+    band_names = image.bandNames().getInfo()
+
+    if "built_surface" not in band_names:
+        raise RuntimeError(
+            f"La imagen {image_id} no contiene built_surface."
+        )
+
+    return image.select("built_surface")
+
+
+def download_raster(image, year):
+    """Descarga el mapa de superficie construida de una época."""
+    region = ee.Geometry.Rectangle(
+        BOUNDS,
+        proj="EPSG:4326",
+        geodesic=False,
+    )
+
+    url = image.selfMask().getThumbURL({
+        "region": region,
+        "dimensions": 1100,
+        "format": "png",
+        "min": 0,
+        "max": 6000,
+        "palette": PALETTE,
+    })
+
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "GeoportalExpansionUrbana/1.0"},
+    )
+
+    with urllib.request.urlopen(request, timeout=180) as response:
+        content = response.read()
+
+    if not content or not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise RuntimeError(
+            f"La descarga del raster de {year} no devolvió un PNG válido."
+        )
+
+    (D / f"raster_{year}.png").write_bytes(content)
 
 
 def main():
@@ -104,34 +159,14 @@ def main():
     D.mkdir(parents=True, exist_ok=True)
 
     districts = build_feature_collection()
-    collection = ee.ImageCollection(COLLECTION_ID)
-
-    image_count = collection.size().getInfo()
-    if not image_count:
-        raise RuntimeError(
-            f"La colección {COLLECTION_ID} no contiene imágenes accesibles."
-        )
-
-    region = ee.Geometry.Rectangle(BOUNDS)
-    built_by_district = {district[0]: [] for district in DIST}
+    built = {district[0]: [] for district in DIST}
 
     for year in YEARS:
-        print(f"Procesando época {year}...")
+        print(f"Procesando {year}...")
 
-        annual = collection.filter(
-            ee.Filter.calendarRange(year, year, "year")
-        )
+        image = get_year_image(year)
 
-        if annual.size().getInfo() == 0:
-            raise RuntimeError(
-                f"No se encontró una imagen de GHSL para {year}. "
-                "Verifica las épocas disponibles en la colección."
-            )
-
-        image = ee.Image(annual.first()).select("built_surface")
-
-        # Suma la superficie construida por distrito.
-        stats = image.reduceRegions(
+        statistics = image.reduceRegions(
             collection=districts,
             reducer=ee.Reducer.sum(),
             scale=100,
@@ -139,46 +174,24 @@ def main():
         ).getInfo()
 
         values = {
-            feature["properties"]["name"]: feature["properties"].get("sum")
-            for feature in stats["features"]
+            feature["properties"]["name"]:
+                feature["properties"].get("sum")
+            for feature in statistics["features"]
         }
 
-        for name in built_by_district:
+        for name in built:
             value = values.get(name)
-            # La banda built_surface se expresa en m².
-            built_by_district[name].append(
-                round(float(value) / 1_000_000, 3)
-                if value is not None
-                else None
-            )
 
-        thumbnail_url = image.selfMask().getThumbURL({
-            "region": region,
-            "dimensions": 1100,
-            "format": "png",
-            "min": 0,
-            "max": 6000,
-            "palette": [
-                "ffe9a8",
-                "fdae61",
-                "e8503a",
-                "7f0f2a",
-            ],
-        })
+            if value is None:
+                raise RuntimeError(
+                    f"No se obtuvo estadística para {name} en {year}."
+                )
 
-        request = urllib.request.Request(
-            thumbnail_url,
-            headers={"User-Agent": "GeoportalExpansionUrbana/1.0"},
-        )
+            # built_surface está en m²; convertir a km².
+            built[name].append(round(float(value) / 1_000_000, 3))
 
-        with urllib.request.urlopen(request, timeout=180) as response:
-            content = response.read()
-
-        if not content:
-            raise RuntimeError(f"El raster de {year} llegó vacío.")
-
-        (D / f"raster_{year}.png").write_bytes(content)
-        print(f"Época {year}: raster y estadísticas generados.")
+        download_raster(image, year)
+        print(f"Época {year}: completada.")
 
     output = {
         "years": YEARS,
@@ -186,16 +199,24 @@ def main():
             [BOUNDS[1], BOUNDS[0]],
             [BOUNDS[3], BOUNDS[2]],
         ],
-        "built": built_by_district,
+        "built": built,
+        "source": COLLECTION_ID,
+        "unit": "km2",
     }
 
-    (D / "expansion_gee.json").write_text(
+    # Escritura temporal para evitar dejar un JSON parcial.
+    temporary_file = D / "expansion_gee.tmp"
+
+    temporary_file.write_text(
         json.dumps(output, ensure_ascii=False),
         encoding="utf-8",
     )
 
-    print("Proceso terminado: data/expansion_gee.json")
+    temporary_file.replace(D / "expansion_gee.json")
+
+    print("OK: data/expansion_gee.json generado correctamente.")
 
 
 if __name__ == "__main__":
     main()
+
