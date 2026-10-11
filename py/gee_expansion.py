@@ -14,7 +14,9 @@ import ee
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "py"))
 
-from make_data import D, DIST, YEARS, geojson_rings, voronoi_rings
+from make_data import DIST, YEARS, geojson_rings, voronoi_rings
+
+D = ROOT / "data"
 
 PROJECT = os.environ.get("GEE_PROJECT_ID", "geoportal-gee-peru")
 
