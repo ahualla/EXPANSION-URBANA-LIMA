@@ -1,7 +1,7 @@
 
+
 import os
 import ee
-import google.auth
 
 from flask import Flask, jsonify, send_from_directory
 
@@ -21,10 +21,10 @@ GEE_SERVICE_ACCOUNT_FILE = os.environ.get(
     "/etc/secrets/gee-service-account.json"
 )
 
-GEE_SCOPES = [
-    "https://www.googleapis.com/auth/earthengine",
-    "https://www.googleapis.com/auth/cloud-platform"
-]
+GEE_SERVICE_ACCOUNT_EMAIL = os.environ.get(
+    "GEE_SERVICE_ACCOUNT_EMAIL",
+    "geoportal-gee@geoportal-gee-peru.iam.gserviceaccount.com"
+)
 
 
 # ============================================================
@@ -33,7 +33,7 @@ GEE_SCOPES = [
 
 @app.route("/")
 def inicio():
-    """Muestra la página principal del geoportal."""
+    """Muestra el geoportal."""
 
     return send_from_directory(
         BASE_DIR,
@@ -47,7 +47,7 @@ def inicio():
 
 @app.route("/<folder>/<path:filename>")
 def archivos(folder, filename):
-    """Sirve imágenes, hojas de estilo, JavaScript y datos."""
+    """Sirve CSS, JavaScript, imágenes y datos."""
 
     carpetas_permitidas = {
         "assets",
@@ -107,15 +107,20 @@ def gee_diagnostico():
         else []
     )
 
+    archivo_existe = os.path.isfile(
+        GEE_SERVICE_ACCOUNT_FILE
+    )
+
     return jsonify({
         "status": "ok",
         "project_id_configurado": bool(
             GEE_PROJECT_ID
         ),
-        "ruta_credenciales": GEE_SERVICE_ACCOUNT_FILE,
-        "archivo_credenciales_existe": os.path.isfile(
-            GEE_SERVICE_ACCOUNT_FILE
+        "cuenta_servicio_configurada": bool(
+            GEE_SERVICE_ACCOUNT_EMAIL
         ),
+        "ruta_credenciales": GEE_SERVICE_ACCOUNT_FILE,
+        "archivo_credenciales_existe": archivo_existe,
         "directorio_secrets_existe": directorio_existe,
         "archivos_secretos": archivos_secretos
     })
@@ -127,7 +132,7 @@ def gee_diagnostico():
 
 @app.route("/api/gee-test")
 def gee_test():
-    """Autentica Earth Engine y prueba Sentinel-2."""
+    """Autentica Earth Engine y consulta Sentinel-2."""
 
     project_id = os.environ.get(
         "GEE_PROJECT_ID"
@@ -138,8 +143,13 @@ def gee_test():
         "/etc/secrets/gee-service-account.json"
     )
 
+    service_account_email = os.environ.get(
+        "GEE_SERVICE_ACCOUNT_EMAIL",
+        "geoportal-gee@geoportal-gee-peru.iam.gserviceaccount.com"
+    )
+
     # --------------------------------------------------------
-    # 1. Validar el proyecto
+    # 1. Validar configuración
     # --------------------------------------------------------
 
     if not project_id:
@@ -148,49 +158,33 @@ def gee_test():
             "message": "Falta configurar GEE_PROJECT_ID"
         }), 503
 
-    # --------------------------------------------------------
-    # 2. Validar las credenciales
-    # --------------------------------------------------------
-
     if not os.path.isfile(json_path):
-        directorio_secrets = "/etc/secrets"
-
-        archivos_secretos = (
-            os.listdir(directorio_secrets)
-            if os.path.isdir(directorio_secrets)
-            else []
-        )
-
         return jsonify({
             "status": "error",
             "message": "No se encontró el archivo de credenciales",
             "ruta_comprobada": json_path,
             "directorio_secrets_existe": os.path.isdir(
-                directorio_secrets
-            ),
-            "archivos_secretos": archivos_secretos
+                "/etc/secrets"
+            )
         }), 503
 
     # --------------------------------------------------------
-    # 3. Cargar credenciales con alcances explícitos
+    # 2. Autenticar e inicializar Earth Engine
     # --------------------------------------------------------
 
     try:
-        credentials, _ = (
-            google.auth.load_credentials_from_file(
-                json_path,
-                scopes=GEE_SCOPES
-            )
+        credentials = ee.ServiceAccountCredentials(
+            service_account_email,
+            json_path
         )
 
-        # Inicializar la API de Earth Engine
         ee.Initialize(
             credentials=credentials,
             project=project_id
         )
 
         # ----------------------------------------------------
-        # 4. Probar una colección Sentinel-2
+        # 3. Consultar colección Sentinel-2
         # ----------------------------------------------------
 
         cantidad_imagenes = (
@@ -207,13 +201,14 @@ def gee_test():
         )
 
         # ----------------------------------------------------
-        # 5. Devolver el resultado
+        # 4. Respuesta de éxito
         # ----------------------------------------------------
 
         return jsonify({
             "status": "ok",
-            "message": "Google Earth Engine conectado",
+            "message": "Google Earth Engine conectado correctamente",
             "project_id": project_id,
+            "cuenta_servicio": service_account_email,
             "coleccion": "COPERNICUS/S2_SR_HARMONIZED",
             "periodo": {
                 "inicio": "2024-06-01",
@@ -222,20 +217,20 @@ def gee_test():
             "imagenes_encontradas": cantidad_imagenes
         })
 
-    except Exception:
-        # El detalle técnico se guarda en Render Logs.
-        # No se exponen credenciales al navegador.
+    except Exception as error:
+        # El detalle técnico se guarda en los logs de Render.
+        # No se devuelve la excepción completa al navegador.
 
         app.logger.exception(
             "Error al conectar con Google Earth Engine"
         )
 
+        # Identificar el tipo de error sin revelar credenciales.
         return jsonify({
             "status": "error",
-            "message": (
-                "Falló la conexión con Earth Engine. "
-                "Revisa los logs de Render."
-            )
+            "message": "Falló la conexión con Earth Engine",
+            "tipo_error": type(error).__name__,
+            "detalle": str(error)[:500]
         }), 500
 
 
@@ -251,3 +246,4 @@ if __name__ == "__main__":
         ),
         debug=False
     )
+
