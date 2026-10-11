@@ -1,8 +1,14 @@
 
 
-import os
-import ee
 
+#!/usr/bin/env python3
+"""Backend Flask del Geoportal de Expansión Urbana de Lima."""
+
+import json
+import os
+from pathlib import Path
+
+import ee
 from flask import Flask, jsonify, send_from_directory
 
 
@@ -12,19 +18,30 @@ from flask import Flask, jsonify, send_from_directory
 
 app = Flask(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
 
-GEE_PROJECT_ID = os.environ.get("GEE_PROJECT_ID")
+GEE_PROJECT_ID = os.environ.get(
+    "GEE_PROJECT_ID",
+    "geoportal-gee-peru",
+)
 
 GEE_SERVICE_ACCOUNT_FILE = os.environ.get(
     "GEE_SERVICE_ACCOUNT_FILE",
-    "/etc/secrets/gee-service-account.json"
+    os.environ.get(
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "/etc/secrets/gee-service-account.json",
+    ),
 )
 
 GEE_SERVICE_ACCOUNT_EMAIL = os.environ.get(
     "GEE_SERVICE_ACCOUNT_EMAIL",
-    "geoportal-gee@geoportal-gee-peru.iam.gserviceaccount.com"
+    "geoportal-gee@geoportal-gee-peru.iam.gserviceaccount.com",
 )
+
+GEE_COLLECTION = "JRC/GHSL/P2023A/GHS_BUILT_S"
+
+STATIC_FOLDERS = {"assets", "css", "js", "data"}
 
 
 # ============================================================
@@ -33,12 +50,8 @@ GEE_SERVICE_ACCOUNT_EMAIL = os.environ.get(
 
 @app.route("/")
 def inicio():
-    """Muestra el geoportal."""
-
-    return send_from_directory(
-        BASE_DIR,
-        "index.html"
-    )
+    """Muestra la página principal del geoportal."""
+    return send_from_directory(str(BASE_DIR), "index.html")
 
 
 # ============================================================
@@ -47,29 +60,17 @@ def inicio():
 
 @app.route("/<folder>/<path:filename>")
 def archivos(folder, filename):
-    """Sirve CSS, JavaScript, imágenes y datos."""
+    """Sirve archivos estáticos de las carpetas autorizadas."""
 
-    carpetas_permitidas = {
-        "assets",
-        "css",
-        "js",
-        "data"
-    }
-
-    if folder not in carpetas_permitidas:
+    if folder not in STATIC_FOLDERS:
         return jsonify({
             "status": "error",
-            "message": "Ruta no permitida"
+            "message": "Ruta no permitida",
         }), 404
 
-    directorio = os.path.join(
-        BASE_DIR,
-        folder
-    )
-
     return send_from_directory(
-        directorio,
-        filename
+        str(BASE_DIR / folder),
+        filename,
     )
 
 
@@ -79,50 +80,90 @@ def archivos(folder, filename):
 
 @app.route("/api/health")
 def health():
-    """Comprueba que Flask esté funcionando."""
+    """Comprueba que el backend esté funcionando."""
 
     return jsonify({
         "status": "ok",
-        "message": "Backend Python funcionando"
+        "message": "Backend Python funcionando",
+        "project": "Geoportal de Expansión Urbana de Lima",
     })
 
 
 # ============================================================
-# DIAGNÓSTICO DE CONFIGURACIÓN
+# ESTADO DE LOS DATOS DE EXPANSIÓN URBANA
+# ============================================================
+
+@app.route("/api/expansion-status")
+def expansion_status():
+    """Comprueba si existen los datos generados por Earth Engine."""
+
+    json_path = DATA_DIR / "expansion_gee.json"
+
+    if not json_path.is_file():
+        return jsonify({
+            "status": "warning",
+            "datos_reales_disponibles": False,
+            "message": (
+                "No se encontró expansion_gee.json. "
+                "Todavía no se han generado los datos históricos de GHSL."
+            ),
+        }), 200
+
+    try:
+        with json_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        years = data.get("years", [])
+        built = data.get("built", {})
+        missing_rasters = [
+            year for year in years
+            if not (DATA_DIR / f"raster_{year}.png").is_file()
+        ]
+
+        return jsonify({
+            "status": "ok",
+            "datos_reales_disponibles": bool(years and built),
+            "coleccion": GEE_COLLECTION,
+            "epocas": years,
+            "cantidad_distritos": len(built),
+            "raster_faltantes": missing_rasters,
+            "message": (
+                "Datos históricos encontrados."
+                if years and built
+                else "El archivo existe, pero está incompleto."
+            ),
+        })
+
+    except (OSError, json.JSONDecodeError, TypeError) as error:
+        app.logger.exception("No se pudieron leer los datos de expansión.")
+
+        return jsonify({
+            "status": "error",
+            "message": "No se pudieron leer los datos de expansión.",
+            "tipo_error": type(error).__name__,
+        }), 500
+
+
+# ============================================================
+# DIAGNÓSTICO DE CREDENCIALES
 # ============================================================
 
 @app.route("/api/gee-diagnostico")
 def gee_diagnostico():
-    """Comprueba la configuración sin mostrar secretos."""
+    """Comprueba la configuración sin devolver secretos."""
 
-    directorio_secrets = "/etc/secrets"
-
-    directorio_existe = os.path.isdir(
-        directorio_secrets
-    )
-
-    archivos_secretos = (
-        os.listdir(directorio_secrets)
-        if directorio_existe
-        else []
-    )
-
-    archivo_existe = os.path.isfile(
-        GEE_SERVICE_ACCOUNT_FILE
-    )
+    secret_directory = Path("/etc/secrets")
+    credentials_path = Path(GEE_SERVICE_ACCOUNT_FILE)
 
     return jsonify({
         "status": "ok",
-        "project_id_configurado": bool(
-            GEE_PROJECT_ID
-        ),
+        "project_id_configurado": bool(GEE_PROJECT_ID),
         "cuenta_servicio_configurada": bool(
             GEE_SERVICE_ACCOUNT_EMAIL
         ),
-        "ruta_credenciales": GEE_SERVICE_ACCOUNT_FILE,
-        "archivo_credenciales_existe": archivo_existe,
-        "directorio_secrets_existe": directorio_existe,
-        "archivos_secretos": archivos_secretos
+        "archivo_credenciales_existe": credentials_path.is_file(),
+        "directorio_secrets_existe": secret_directory.is_dir(),
+        "ruta_credenciales": str(credentials_path),
     })
 
 
@@ -132,105 +173,66 @@ def gee_diagnostico():
 
 @app.route("/api/gee-test")
 def gee_test():
-    """Autentica Earth Engine y consulta Sentinel-2."""
+    """Autentica Earth Engine y consulta la colección de GHSL."""
 
-    project_id = os.environ.get(
-        "GEE_PROJECT_ID"
-    )
-
-    json_path = os.environ.get(
-        "GEE_SERVICE_ACCOUNT_FILE",
-        "/etc/secrets/gee-service-account.json"
-    )
-
-    service_account_email = os.environ.get(
-        "GEE_SERVICE_ACCOUNT_EMAIL",
-        "geoportal-gee@geoportal-gee-peru.iam.gserviceaccount.com"
-    )
-
-    # --------------------------------------------------------
-    # 1. Validar configuración
-    # --------------------------------------------------------
-
-    if not project_id:
+    if not GEE_PROJECT_ID:
         return jsonify({
             "status": "error",
-            "message": "Falta configurar GEE_PROJECT_ID"
+            "message": "Falta configurar GEE_PROJECT_ID.",
         }), 503
 
-    if not os.path.isfile(json_path):
+    credentials_path = Path(GEE_SERVICE_ACCOUNT_FILE)
+
+    if not credentials_path.is_file():
         return jsonify({
             "status": "error",
-            "message": "No se encontró el archivo de credenciales",
-            "ruta_comprobada": json_path,
-            "directorio_secrets_existe": os.path.isdir(
-                "/etc/secrets"
-            )
+            "message": "No se encontró el archivo de credenciales.",
+            "ruta_comprobada": str(credentials_path),
         }), 503
-
-    # --------------------------------------------------------
-    # 2. Autenticar e inicializar Earth Engine
-    # --------------------------------------------------------
 
     try:
         credentials = ee.ServiceAccountCredentials(
-            service_account_email,
-            json_path
+            GEE_SERVICE_ACCOUNT_EMAIL,
+            str(credentials_path),
         )
 
         ee.Initialize(
             credentials=credentials,
-            project=project_id
+            project=GEE_PROJECT_ID,
         )
 
-        # ----------------------------------------------------
-        # 3. Consultar colección Sentinel-2
-        # ----------------------------------------------------
+        collection = ee.ImageCollection(GEE_COLLECTION)
 
-        cantidad_imagenes = (
-            ee.ImageCollection(
-                "COPERNICUS/S2_SR_HARMONIZED"
-            )
-            .filterDate(
-                "2024-06-01",
-                "2024-07-01"
-            )
+        image_count = (
+            collection
+            .filterDate("2020-01-01", "2021-01-01")
             .limit(1)
             .size()
             .getInfo()
         )
 
-        # ----------------------------------------------------
-        # 4. Respuesta de éxito
-        # ----------------------------------------------------
-
         return jsonify({
             "status": "ok",
-            "message": "Google Earth Engine conectado correctamente",
-            "project_id": project_id,
-            "cuenta_servicio": service_account_email,
-            "coleccion": "COPERNICUS/S2_SR_HARMONIZED",
-            "periodo": {
-                "inicio": "2024-06-01",
-                "fin": "2024-07-01"
+            "message": "Google Earth Engine conectado correctamente.",
+            "project_id": GEE_PROJECT_ID,
+            "cuenta_servicio": GEE_SERVICE_ACCOUNT_EMAIL,
+            "coleccion": GEE_COLLECTION,
+            "periodo_consultado": {
+                "inicio": "2020-01-01",
+                "fin": "2021-01-01",
             },
-            "imagenes_encontradas": cantidad_imagenes
+            "imagenes_encontradas": image_count,
         })
 
     except Exception as error:
-        # El detalle técnico se guarda en los logs de Render.
-        # No se devuelve la excepción completa al navegador.
-
         app.logger.exception(
-            "Error al conectar con Google Earth Engine"
+            "Error al conectar con Google Earth Engine."
         )
 
-        # Identificar el tipo de error sin revelar credenciales.
         return jsonify({
             "status": "error",
-            "message": "Falló la conexión con Earth Engine",
+            "message": "Falló la conexión con Earth Engine.",
             "tipo_error": type(error).__name__,
-            "detalle": str(error)[:500]
         }), 500
 
 
@@ -241,9 +243,6 @@ def gee_test():
 if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
-        port=int(
-            os.environ.get("PORT", 5000)
-        ),
-        debug=False
+        port=int(os.environ.get("PORT", "5000")),
+        debug=False,
     )
-
