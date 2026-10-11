@@ -13,7 +13,9 @@ YEARS = list(range(1975, 2021, 5))
 
 GEOJSON_CANDIDATES = [
     D / "distritos.geojson",
+    D / "distrito.json",
     ROOT / "distritos.geojson",
+    ROOT / "distrito.json",
 ]
 
 
