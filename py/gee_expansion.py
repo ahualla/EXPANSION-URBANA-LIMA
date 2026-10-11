@@ -11,9 +11,17 @@ DATA_DIR = ROOT / "data"
 
 sys.path.insert(0, str(ROOT / "py"))
 
-from make_data import DIST, YEARS, geojson_rings, voronoi_rings
+
+import make_data
+
+# Inicializar los distritos antes de ejecutar Google Earth Engine.
+DIST = make_data.build_districts() or make_data.DIST
+YEARS = make_data.YEARS
+geojson_rings = make_data.geojson_rings
+voronoi_rings = make_data.voronoi_rings
 
 D = ROOT / "data"
+
 
 
 PROJECT = os.environ.get("GEE_PROJECT_ID", "geoportal-gee-peru")
