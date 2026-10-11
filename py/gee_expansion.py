@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "py"))
 import make_data
 
 # Inicializar los distritos antes de ejecutar Google Earth Engine.
-DIST = make_data.build_districts() or make_data.DIST
+   DIST = make_data.DIST
 YEARS = make_data.YEARS
 geojson_rings = make_data.geojson_rings
 voronoi_rings = make_data.voronoi_rings
