@@ -1,0 +1,37 @@
+:root{--bg:#04202f;--p:#0a3249;--p2:#0d3d58;--ink:#e8f1f6;--mut:#8fb0c2;--gold:#c9a24b;--teal:#0e9aa7;--g:#2e9e5b}
+*{box-sizing:border-box;margin:0}html,body{height:100%}
+body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);display:flex;flex-direction:column}
+header{display:flex;align-items:center;gap:14px;padding:6px 16px;background:#022c44;border-bottom:2px solid var(--gold);flex-wrap:wrap}
+header img{border-radius:8px}.title h1{font-size:1.15rem}.title small{color:var(--mut)}.actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:0;border-radius:999px;padding:8px 16px;font:inherit;font-weight:700;color:#fff;background:linear-gradient(135deg,var(--g),var(--teal));cursor:pointer}
+.btn.alt{background:none;border:1.5px solid var(--gold)}.btn.sm{padding:5px 14px;font-size:.8rem}
+.btn:focus-visible,select:focus-visible,li:focus-visible,input:focus-visible{outline:3px solid var(--teal)}
+.demo{background:#7a5a10;text-align:center;padding:4px;font-size:.85rem}
+.app{flex:1;display:grid;grid-template-columns:360px 1fr;min-height:0}
+aside{overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.panel{background:var(--p);border-radius:14px;padding:14px;border:1px solid #ffffff14}
+.panel h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:10px;display:flex;justify-content:space-between}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.kpis div{background:var(--p2);border-radius:10px;padding:8px;text-align:center}.kpis b{display:block;font-size:1.1rem}
+.kpis small,.note,.leg,.ticks{color:var(--mut);font-size:.75rem}canvas{width:100%;display:block}
+label{display:block;color:var(--mut);font-size:.8rem;margin-bottom:8px}label.inl{display:flex;align-items:center;gap:6px;margin:0}label.chk{display:flex;gap:8px;align-items:center;color:var(--ink)}
+select{width:100%;margin-top:3px;padding:7px;border-radius:8px;border:1px solid #ffffff22;background:var(--p2);color:var(--ink);font:inherit}label.inl select{width:auto;margin:0}
+input[type=range]{width:100%;accent-color:var(--teal)}.row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.ticks{display:flex;justify-content:space-between}
+ol{list-style:none;padding:0;display:flex;flex-direction:column;gap:4px;max-height:360px;overflow:auto}
+li{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;cursor:pointer;background:var(--p2)}li:hover,li.on{background:#14516f}
+li .n{flex:1}li .v{font-weight:700}.dot{width:11px;height:11px;border-radius:50%}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:.75rem;font-weight:700;color:#04202f}
+.kv{display:grid;grid-template-columns:1fr auto;gap:2px 10px;margin:8px 0;font-size:.85rem}.kv span:nth-child(odd){color:var(--mut)}.kv span:nth-child(even){text-align:right;font-weight:600}
+main{position:relative}#map{height:100%;min-height:420px;background:#0b1a24}
+.yb{position:absolute;top:12px;right:14px;z-index:500;font-size:3rem;font-weight:800;color:#fff;text-shadow:0 2px 12px #000;pointer-events:none}
+.legend{position:absolute;bottom:22px;right:14px;z-index:500;background:#04202fe6;border:1px solid #ffffff22;border-radius:12px;padding:10px 12px;font-size:.78rem}
+.legend div{display:flex;align-items:center;gap:6px}.legend i{width:12px;height:12px;border-radius:3px}.legend small{color:var(--mut)}
+.lbl{background:none;border:0;box-shadow:none;color:#fff;font-weight:700;font-size:10px;text-shadow:0 0 3px #000,0 0 3px #000}.lbl:before{display:none}
+dialog{border:0;border-radius:16px;padding:22px;max-width:480px;background:var(--p);color:var(--ink)}dialog::backdrop{background:#000a}
+dialog.wide{max-width:660px;max-height:85vh;overflow:auto}dialog h3{color:var(--gold);margin-top:12px}dialog p{color:var(--mut)}dialog code{color:var(--ink)}
+table{border-collapse:collapse;margin:6px 0;width:100%}td,th{border:1px solid #ffffff22;padding:4px 10px;text-align:left}
+footer{text-align:center;padding:6px;font-size:.75rem;color:var(--mut);background:#022c44}
+.fb{position:absolute;inset:0;background:radial-gradient(#0e3a52,#04202f)}.fb svg{width:100%;height:100%}.fb path{transition:fill-opacity .2s}.fb g:hover path{fill-opacity:1}
+.fbn{position:absolute;bottom:8px;left:12px;color:var(--mut);font-size:.75rem}
+@media(max-width:820px){.app{grid-template-columns:1fr;grid-template-rows:60vh auto}main{order:-1}aside{overflow:visible}}

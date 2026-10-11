@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Expansión Urbana de Lima 1975-2020 | Geospatial_Perú</title>
+<meta name="description" content="Geoportal de expansión urbana de Lima y Callao por distrito: área construida 1975-2020, crecimiento, tipologías y huella urbana.">
+<link rel="icon" href="assets/logo.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header>
+  <img src="assets/logo.png" alt="Geospatial_Perú" height="46">
+  <div class="title"><h1>Expansión Urbana de Lima</h1><small>Lima Metropolitana y Callao · 44 distritos · 1975-2020</small></div>
+  <div class="actions"><button id="bPeru" class="btn alt">🇵🇪 Perú</button><button id="bLima" class="btn alt">Lima</button><button id="bMet" class="btn">Metodología</button><button id="bCsv" class="btn alt">CSV</button></div>
+</header>
+<div id="demo" class="demo" hidden>⚠ SERIE DEMO ilustrativa (no son datos reales). Para datos reales: <code>python py/gee_expansion.py TU_PROYECTO</code></div>
+<div class="app">
+<aside>
+  <section class="panel">
+    <h2>Lima en <span id="yTxt"></span></h2>
+    <div class="kpis"><div><b id="kTot">–</b><small>km² construidos</small></div><div><b id="kGr">–</b><small>vs. año base</small></div><div><b id="kRate">–</b><small>km²/año</small></div></div>
+    <canvas id="cityChart" height="120" aria-label="Área construida total por año"></canvas>
+    <p class="leg">Mayor expansión: <b id="kTop">–</b></p>
+  </section>
+  <section class="panel">
+    <h2>Tiempo</h2>
+    <div class="row"><button id="play" class="btn sm">▶ Reproducir</button><label class="inl">Año base <select id="base"></select></label></div>
+    <input id="yr" type="range" min="0" value="0" aria-label="Año">
+    <div id="ticks" class="ticks"></div>
+  </section>
+  <section class="panel">
+    <h2>Capa</h2>
+    <label>Indicador<select id="vari"></select></label>
+    <label>Mapa base<select id="bm"><option value="sat">Satélite (Esri)</option><option value="dark">Oscuro</option><option value="light">Claro</option><option value="topo">Topográfico</option></select></label>
+    <label>Opacidad de distritos <input id="op" type="range" min="0" max="100" value="65"></label>
+    <label class="chk"><input id="lbl" type="checkbox"> Etiquetas de distritos</label>
+    <label class="chk"><input id="ras" type="checkbox"> Huella urbana (GHSL)</label>
+    <small id="rasNote" class="note"></small>
+  </section>
+  <section class="panel" id="detail"><h2>Distrito</h2><p class="note">Haz clic en un distrito del mapa o del ranking.</p></section>
+  <section class="panel"><h2>Ranking</h2><ol id="rank"></ol></section>
+  <p class="note">Indicadores de apoyo al análisis territorial. Área construida ≠ uso del suelo; no reemplaza instrumentos oficiales (IMP, MML, MVCS).</p>
+</aside>
+<main><div id="map"></div><div id="yb" class="yb"></div><div id="legend" class="legend"></div></main>
+</div>
+<dialog id="dMet" class="wide"><form method="dialog"><h2>Metodología</h2>
+<h3>Fuente</h3><p>JRC <b>GHSL GHS-BUILT-S R2023A</b>: superficie construida (m² por celda de 100 m) en épocas de 5 años, 1975-2020, derivada de Landsat y Sentinel-2. Se suma por distrito con Google Earth Engine (<code>py/gee_expansion.py</code>).</p>
+<h3>Indicadores</h3>
+<p><b>% urbanizado</b> = área construida ÷ área del distrito.<br><b>Expansión</b> = km² construidos año final − año base.<br><b>Crecimiento anual (TCAC)</b> = (final ÷ base)^(1/años) − 1.<br><b>Expansión relativa</b> = km² nuevos ÷ área del distrito.</p>
+<h3>Tipología (año seleccionado)</h3>
+<table><tr><th>Tipo</th><th>Regla</th></tr><tr><td>Consolidado</td><td>≥ 60 % urbanizado y expansión &lt; 4 % del distrito por década</td></tr><tr><td>Expansión acelerada</td><td>expansión ≥ 4 % del área del distrito por década</td></tr><tr><td>En consolidación</td><td>≥ 15 % urbanizado, ritmo moderado</td></tr><tr><td>Emergente</td><td>&lt; 15 % urbanizado</td></tr></table>
+<h3>Límites y advertencias</h3><p>Sin el archivo <code>data/distritos.geojson</code> (IGN/INEI) los distritos son zonas aproximadas por proximidad a su centro. La serie marcada DEMO es ilustrativa. GHSL tiene resolución de 100 m: puede omitir construcciones pequeñas o dispersas.</p>
+<button class="btn">Cerrar</button></form></dialog>
+<footer>© <span id="y"></span> Geospatial_Perú · <span id="src"></span> · <span id="upd"></span></footer>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="data/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
