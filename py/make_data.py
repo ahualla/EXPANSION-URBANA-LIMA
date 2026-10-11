@@ -14,10 +14,11 @@ YEARS = list(range(1975, 2021, 5))
 GEOJSON_CANDIDATES = [
     D / "distritos.geojson",
     ROOT / "distritos.geojson",
-    ROOT / "data" / "distritos.geojson",
 ]
 
+
 def find_geojson():
+    """Encuentra el archivo GeoJSON de los distritos."""
     for path in GEOJSON_CANDIDATES:
         if path.is_file():
             return path
@@ -25,26 +26,54 @@ def find_geojson():
 
 
 def normalize_name(value):
+    """Normaliza los nombres para evitar espacios inconsistentes."""
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
 def feature_name(feature):
+    """Identifica el nombre del distrito en distintas estructuras GeoJSON."""
     props = feature.get("properties") or {}
 
-    for key in (
-        "name", "NAME", "nombre", "NOMBRE",
-        "distrito", "DISTRITO", "NOMBDIST",
-        "NAME_2", "name_2", "DIST"
-    ):
+    preferred_keys = (
+        "_geoportal_name",
+        "name", "NAME", "Name",
+        "nombre", "NOMBRE", "Nombre",
+        "distrito", "DISTRITO", "Distrito",
+        "NOMBDIST", "NOM_DIST", "NOMB_DIST",
+        "NAME_2", "name_2", "NAME_3",
+        "DIST", "DISTRICT", "district",
+        "nom_dist", "ubigeo_name",
+    )
+
+    for key in preferred_keys:
         value = props.get(key)
-        if value:
+        if value is not None and str(value).strip():
             return normalize_name(value)
 
-    return ""
+    # Buscar campos que probablemente contengan el nombre.
+    for key, value in props.items():
+        key_lower = str(key).lower()
+        if (
+            value is not None
+            and isinstance(value, (str, int))
+            and str(value).strip()
+            and any(word in key_lower for word in (
+                "dist", "nombre", "name", "nom_"
+            ))
+        ):
+            return normalize_name(value)
+
+    # Último recurso: usar el identificador del elemento.
+    feature_id = feature.get("id")
+    if feature_id is not None:
+        return f"Distrito {normalize_name(feature_id)}"
+
+    return normalize_name(props.get("_geoportal_fallback", ""))
 
 
 def polygon_parts(geometry):
-    if not geometry:
+    """Devuelve los polígonos de una geometría GeoJSON."""
+    if not isinstance(geometry, dict):
         return []
 
     kind = geometry.get("type")
@@ -60,7 +89,7 @@ def polygon_parts(geometry):
 
 
 def outer_rings(geometry):
-    """Devuelve los anillos exteriores en coordenadas GeoJSON [lon, lat]."""
+    """Obtiene anillos exteriores en orden GeoJSON [longitud, latitud]."""
     result = []
 
     for polygon in polygon_parts(geometry):
@@ -70,17 +99,38 @@ def outer_rings(geometry):
     return result
 
 
+def ring_points(ring):
+    """Convierte las coordenadas de un anillo en puntos numéricos válidos."""
+    points = []
+
+    for point in ring or []:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+
+        try:
+            lon = float(point[0])
+            lat = float(point[1])
+        except (TypeError, ValueError):
+            continue
+
+        if (
+            math.isfinite(lon)
+            and math.isfinite(lat)
+            and -180 <= lon <= 180
+            and -90 <= lat <= 90
+        ):
+            points.append((lon, lat))
+
+    return points
+
+
 def ring_centroid(ring):
-    points = [
-        (float(p[0]), float(p[1]))
-        for p in ring
-        if isinstance(p, (list, tuple)) and len(p) >= 2
-    ]
+    """Calcula un centro aproximado a partir de los vértices."""
+    points = ring_points(ring)
 
     if not points:
         return None
 
-    # Centro aproximado por promedio de vértices.
     lon = sum(p[0] for p in points) / len(points)
     lat = sum(p[1] for p in points) / len(points)
 
@@ -88,12 +138,8 @@ def ring_centroid(ring):
 
 
 def ring_area_km2(ring):
-    """Área aproximada del anillo en km²."""
-    points = [
-        (float(p[0]), float(p[1]))
-        for p in ring
-        if isinstance(p, (list, tuple)) and len(p) >= 2
-    ]
+    """Estima el área de un anillo en kilómetros cuadrados."""
+    points = ring_points(ring)
 
     if len(points) < 3:
         return 0.0
@@ -102,9 +148,13 @@ def ring_area_km2(ring):
     km_lon = 111.32 * math.cos(math.radians(lat0))
     km_lat = 110.574
 
-    xy = [(lon * km_lon, lat * km_lat) for lon, lat in points]
+    xy = [
+        (lon * km_lon, lat * km_lat)
+        for lon, lat in points
+    ]
 
     area = 0.0
+
     for i in range(len(xy)):
         x1, y1 = xy[i]
         x2, y2 = xy[(i + 1) % len(xy)]
@@ -114,30 +164,85 @@ def ring_area_km2(ring):
 
 
 def load_features():
+    """Lee y valida las entidades del GeoJSON."""
     path = find_geojson()
 
     if path is None:
-        return []
+        expected = D / "distritos.geojson"
+        raise FileNotFoundError(
+            f"No se encontró el GeoJSON. Ruta esperada: {expected}"
+        )
 
-    content = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        content = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"No se pudo leer el GeoJSON {path}: {exc}"
+        ) from exc
 
     if content.get("type") == "FeatureCollection":
-        features = content.get("features", [])
+        features = content.get("features") or []
     elif content.get("type") == "Feature":
         features = [content]
     else:
         raise ValueError(
-            f"{path} no contiene un GeoJSON Feature o FeatureCollection válido."
+            f"{path} no contiene un GeoJSON FeatureCollection válido."
         )
 
-    return [
-        feature for feature in features
-        if feature.get("geometry") and feature_name(feature)
-    ]
+    valid = []
+
+    for index, feature in enumerate(features, start=1):
+        if not isinstance(feature, dict):
+            continue
+
+        geometry = feature.get("geometry") or {}
+        rings = outer_rings(geometry)
+
+        if not rings or not any(ring_points(ring) for ring in rings):
+            continue
+
+        props = feature.setdefault("properties", {})
+
+        if not isinstance(props, dict):
+            props = {}
+            feature["properties"] = props
+
+        # Conservar el nombre original cuando existe.
+        name = feature_name(feature)
+
+        if not name:
+            name = f"Distrito {index:03d}"
+
+        props["_geoportal_name"] = name
+        valid.append(feature)
+
+    print(f"GeoJSON encontrado: {path}")
+    print(f"Elementos originales: {len(features)}")
+    print(f"Elementos con geometría válida: {len(valid)}")
+
+    if features:
+        first_props = features[0].get("properties") or {}
+        print(f"Campos del GeoJSON: {list(first_props.keys())}")
+
+    if not valid:
+        raise ValueError(
+            "El GeoJSON no contiene polígonos válidos. "
+            "Verifica sus geometrías y coordenadas."
+        )
+
+    names = [feature_name(feature) for feature in valid]
+
+    if len(names) != len(set(names)):
+        raise ValueError(
+            "El GeoJSON contiene nombres de distrito duplicados. "
+            "Cada polígono debe tener un nombre único."
+        )
+
+    return valid
 
 
 def geojson_rings():
-    """Carga los límites reales disponibles en distritos.geojson."""
+    """Carga los límites originales de los distritos."""
     result = {}
 
     for feature in load_features():
@@ -145,26 +250,72 @@ def geojson_rings():
         rings = outer_rings(feature.get("geometry") or {})
 
         if rings:
-            # Una lista de anillos exteriores por distrito.
             result[name] = rings
 
     return result
 
 
+def build_districts():
+    """Construye la lista DIST a partir del GeoJSON."""
+    districts = []
+
+    for feature in load_features():
+        name = feature_name(feature)
+        rings = outer_rings(feature.get("geometry") or {})
+
+        if not rings:
+            continue
+
+        # Centro del primer polígono.
+        centroid = ring_centroid(rings[0])
+
+        if centroid is None:
+            continue
+
+        lat, lon = centroid
+
+        # Sumar las áreas aproximadas de los polígonos exteriores.
+        area = sum(ring_area_km2(ring) for ring in rings)
+
+        if area <= 0:
+            area = 1.0
+
+        # Estos parámetros solo sirven para la serie DEMO.
+        districts.append((
+            name,
+            lat,
+            lon,
+            area,
+            0.45,
+            2000,
+            10,
+        ))
+
+    print(f"Distritos construidos: {len(districts)}")
+    return districts
+
+
+# Se construye al importar el módulo.
+DIST = build_districts()
+
+
 def voronoi_rings():
     """
-    Crea polígonos cuadrados referenciales alrededor de los centroides.
-    Solo se usan si no hay geometría distrital disponible.
-    No son límites administrativos oficiales.
+    Genera cuadrados aproximados como respaldo.
+    No representan límites administrativos oficiales.
     """
     result = {}
 
     for name, lat, lon, area, fraction, t0, slope in DIST:
-        # Tamaño aproximado según el área; limitado para evitar polígonos enormes.
-        radius_km = min(5.0, max(0.8, math.sqrt(max(area, 1.0)) / 2.0))
+        radius_km = min(
+            5.0,
+            max(0.8, math.sqrt(max(area, 1.0)) / 2.0),
+        )
+
         dlat = radius_km / 110.574
         dlon = radius_km / max(
-            20.0, 111.32 * math.cos(math.radians(lat))
+            20.0,
+            111.32 * math.cos(math.radians(lat)),
         )
 
         result[name] = [[
@@ -178,80 +329,52 @@ def voronoi_rings():
     return result
 
 
-def build_districts():
-    """Construye DIST a partir de las geometrías disponibles."""
-    districts = []
-
-    for feature in load_features():
-        name = feature_name(feature)
-        rings = outer_rings(feature.get("geometry") or {})
-
-        if not rings:
-            continue
-
-        centroid = ring_centroid(rings[0])
-        if centroid is None:
-            continue
-
-        lat, lon = centroid
-        area = sum(ring_area_km2(ring) for ring in rings)
-
-        if area <= 0:
-            area = 1.0
-
-        # Parámetros ilustrativos usados únicamente si no hay datos GHSL.
-        districts.append((
-            name,
-            lat,
-            lon,
-            area,
-            0.45,
-            2000,
-            10,
-        ))
-
-    return districts
-
-
-DIST = build_districts()
-
-
 def main():
     real = geojson_rings()
     vor = voronoi_rings()
 
     if not DIST:
-        raise FileNotFoundError(
-            "No se encontraron distritos. Añade un GeoJSON de distritos "
-            "en data/distritos.geojson y verifica que sus propiedades "
-            "incluyan el nombre de cada distrito."
+        raise ValueError(
+            "No se encontraron distritos válidos en distritos.geojson."
         )
 
     gee_file = D / "expansion_gee.json"
     gee = None
 
     if gee_file.exists():
-        candidate = json.loads(gee_file.read_text(encoding="utf-8"))
+        candidate = json.loads(
+            gee_file.read_text(encoding="utf-8")
+        )
 
         years_candidate = candidate.get("years")
         built_candidate = candidate.get("built")
 
-        if not isinstance(years_candidate, list) or not years_candidate:
-            raise ValueError("expansion_gee.json no contiene años válidos.")
+        if (
+            not isinstance(years_candidate, list)
+            or not years_candidate
+        ):
+            raise ValueError(
+                "expansion_gee.json no contiene años válidos."
+            )
 
         if not isinstance(built_candidate, dict):
-            raise ValueError("expansion_gee.json no contiene built válido.")
+            raise ValueError(
+                "expansion_gee.json no contiene un objeto built válido."
+            )
 
         missing = [
-            name for name, *_ in DIST
-            if name not in built_candidate
-            or not isinstance(built_candidate[name], list)
-            or len(built_candidate[name]) != len(years_candidate)
+            name
+            for name, *_ in DIST
+            if (
+                name not in built_candidate
+                or not isinstance(built_candidate[name], list)
+                or len(built_candidate[name]) != len(years_candidate)
+            )
         ]
 
         if missing:
             raise ValueError(
-                "Faltan datos reales o épocas para estos distritos: "
+                "Faltan datos GHSL para estos distritos: "
                 + ", ".join(missing)
             )
 
@@ -263,13 +386,18 @@ def main():
     rasters_complete = bool(
         gee
         and bbox
-        and all((D / f"raster_{year}.png").is_file() for year in years)
+        and all(
+            (D / f"raster_{year}.png").is_file()
+            for year in years
+        )
     )
 
     rasters = None
+
     if rasters_complete:
         rasters = {
-            year: "data:image/png;base64," + base64.b64encode(
+            year: "data:image/png;base64,"
+            + base64.b64encode(
                 (D / f"raster_{year}.png").read_bytes()
             ).decode("ascii")
             for year in years
@@ -320,11 +448,14 @@ def main():
 
     D.mkdir(parents=True, exist_ok=True)
 
+    json_without_rasters = {
+        key: value
+        for key, value in data.items()
+        if key != "rasters"
+    }
+
     (D / "data.json").write_text(
-        json.dumps(
-            {key: value for key, value in data.items() if key != "rasters"},
-            ensure_ascii=False,
-        ),
+        json.dumps(json_without_rasters, ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -345,4 +476,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
