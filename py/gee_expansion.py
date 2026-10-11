@@ -1,7 +1,3 @@
-
-#!/usr/bin/env python3
-"""Genera estadísticas y mapas históricos de expansión urbana de Lima."""
-
 import json
 import os
 import sys
