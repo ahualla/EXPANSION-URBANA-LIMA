@@ -1,5 +1,4 @@
 
-
 #!/usr/bin/env python3
 """Genera estadísticas y mapas históricos de expansión urbana de Lima."""
 
@@ -12,11 +11,12 @@ from pathlib import Path
 import ee
 
 ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "data"
+
 sys.path.insert(0, str(ROOT / "py"))
 
 from make_data import DIST, YEARS, geojson_rings, voronoi_rings
 
-D = ROOT / "data"
 
 PROJECT = os.environ.get("GEE_PROJECT_ID", "geoportal-gee-peru")
 
@@ -35,14 +35,14 @@ SERVICE_ACCOUNT = os.environ.get(
 
 COLLECTION_ID = "JRC/GHSL/P2023A/GHS_BUILT_S"
 
-# Extensión de Lima y Callao: [oeste, sur, este, norte].
+# Extensión de Lima y Callao: oeste, sur, este, norte.
 BOUNDS = [-77.25, -12.58, -76.55, -11.55]
 
 PALETTE = ["ffe9a8", "fdae61", "e8503a", "7f0f2a"]
 
 
 def initialize_gee():
-    """Inicializa Earth Engine con la cuenta de servicio."""
+    """Inicializa Google Earth Engine mediante una cuenta de servicio."""
     key_path = Path(KEY_FILE)
 
     if not key_path.is_file():
@@ -57,23 +57,79 @@ def initialize_gee():
 
     if not email:
         raise RuntimeError(
-            "No se encontró el correo de la cuenta de servicio."
+            "No se encontró client_email en las credenciales."
         )
 
-    credentials = ee.ServiceAccountCredentials(email, str(key_path))
+    credentials = ee.ServiceAccountCredentials(
+        email,
+        str(key_path),
+    )
+
     ee.Initialize(credentials, project=PROJECT)
 
-    print(f"Earth Engine conectado: {PROJECT}")
+    print(f"Earth Engine conectado correctamente: {PROJECT}")
+
+
+def validate_ring(ring, district_name):
+    """
+    Valida un anillo en coordenadas GeoJSON [longitud, latitud].
+    No invierte el orden de las coordenadas.
+    """
+    if not isinstance(ring, (list, tuple)) or len(ring) < 4:
+        raise ValueError(
+            f"El anillo de {district_name} tiene menos de cuatro puntos."
+        )
+
+    coordinates = []
+
+    for point in ring:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            raise ValueError(
+                f"Coordenada inválida en el distrito {district_name}."
+            )
+
+        lon = float(point[0])
+        lat = float(point[1])
+
+        if not (-180 <= lon <= 180 and -90 <= lat <= 90):
+            raise ValueError(
+                f"Coordenada fuera de rango en {district_name}: "
+                f"{[lon, lat]}"
+            )
+
+        coordinates.append([lon, lat])
+
+    if coordinates[0] != coordinates[-1]:
+        coordinates.append(coordinates[0])
+
+    if len(coordinates) < 4:
+        raise ValueError(
+            f"El anillo de {district_name} no es un polígono válido."
+        )
+
+    return coordinates
 
 
 def build_feature_collection():
-    """Crea la colección de polígonos distritales."""
-    rings = {**voronoi_rings(), **geojson_rings()}
+    """Construye los polígonos que se utilizarán en las estadísticas."""
+    real_rings = geojson_rings()
+    fallback_rings = voronoi_rings()
     features = []
+
+    if not DIST:
+        raise ValueError(
+            "No hay distritos en DIST. Revisa data/distritos.geojson "
+            "y la definición de DIST en make_data.py."
+        )
 
     for district in DIST:
         name = district[0]
-        district_rings = rings.get(name)
+
+        # Prioriza los límites distritales reales.
+        district_rings = real_rings.get(name)
+
+        if not district_rings:
+            district_rings = fallback_rings.get(name)
 
         if not district_rings:
             raise ValueError(
@@ -83,15 +139,9 @@ def build_feature_collection():
         polygons = []
 
         for ring in district_rings:
-            # El código original de make_data.py almacena [lat, lon].
-            # Earth Engine requiere [lon, lat].
-            coordinates = [[lon, lat] for lat, lon in ring]
+            coordinates = validate_ring(ring, name)
 
-            if len(coordinates) < 4:
-                raise ValueError(
-                    f"Anillo incompleto para el distrito {name}"
-                )
-
+            # Cada polígono contiene su anillo exterior.
             polygons.append([coordinates])
 
         geometry = ee.Geometry.MultiPolygon(
@@ -104,27 +154,29 @@ def build_feature_collection():
             ee.Feature(geometry, {"name": name})
         )
 
+    print(f"Distritos preparados: {len(features)}")
+
     return ee.FeatureCollection(features)
 
 
 def get_year_image(year):
-    """Carga la imagen GHSL correspondiente a una época concreta."""
+    """Obtiene la imagen GHSL correspondiente al año solicitado."""
     image_id = f"{COLLECTION_ID}/{year}"
     image = ee.Image(image_id)
 
-    # Comprueba que la imagen y su banda se pueden consultar.
     band_names = image.bandNames().getInfo()
 
     if "built_surface" not in band_names:
         raise RuntimeError(
-            f"La imagen {image_id} no contiene built_surface."
+            f"La imagen {image_id} no contiene la banda built_surface. "
+            f"Bandas encontradas: {band_names}"
         )
 
     return image.select("built_surface")
 
 
 def download_raster(image, year):
-    """Descarga el mapa de superficie construida de una época."""
+    """Descarga el mapa PNG de superficie construida para un año."""
     region = ee.Geometry.Rectangle(
         BOUNDS,
         proj="EPSG:4326",
@@ -148,23 +200,26 @@ def download_raster(image, year):
     with urllib.request.urlopen(request, timeout=180) as response:
         content = response.read()
 
-    if not content or not content.startswith(b"\x89PNG\r\n\x1a\n"):
+    if not content.startswith(b"\x89PNG\r\n\x1a\n"):
         raise RuntimeError(
             f"La descarga del raster de {year} no devolvió un PNG válido."
         )
 
-    (D / f"raster_{year}.png").write_bytes(content)
+    raster_path = DATA_DIR / f"raster_{year}.png"
+    raster_path.write_bytes(content)
+
+    print(f"Raster guardado: {raster_path.name}")
 
 
 def main():
     initialize_gee()
-    D.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     districts = build_feature_collection()
     built = {district[0]: [] for district in DIST}
 
     for year in YEARS:
-        print(f"Procesando {year}...")
+        print(f"Procesando año {year}...")
 
         image = get_year_image(year)
 
@@ -178,7 +233,7 @@ def main():
         values = {
             feature["properties"]["name"]:
                 feature["properties"].get("sum")
-            for feature in statistics["features"]
+            for feature in statistics.get("features", [])
         }
 
         for name in built:
@@ -186,14 +241,17 @@ def main():
 
             if value is None:
                 raise RuntimeError(
-                    f"No se obtuvo estadística para {name} en {year}."
+                    f"No se obtuvo una estadística válida para "
+                    f"{name} en {year}."
                 )
 
-            # built_surface está en m²; convertir a km².
-            built[name].append(round(float(value) / 1_000_000, 3))
+            # built_surface está en m²: convertir a km².
+            built[name].append(
+                round(float(value) / 1_000_000, 3)
+            )
 
         download_raster(image, year)
-        print(f"Época {year}: completada.")
+        print(f"Año {year} completado.")
 
     output = {
         "years": YEARS,
@@ -206,17 +264,20 @@ def main():
         "unit": "km2",
     }
 
-    # Escritura temporal para evitar dejar un JSON parcial.
-    temporary_file = D / "expansion_gee.tmp"
+    # Solo publica el JSON cuando todos los años se procesaron.
+    temporary_file = DATA_DIR / "expansion_gee.tmp"
+    final_file = DATA_DIR / "expansion_gee.json"
 
     temporary_file.write_text(
         json.dumps(output, ensure_ascii=False),
         encoding="utf-8",
     )
 
-    temporary_file.replace(D / "expansion_gee.json")
+    temporary_file.replace(final_file)
 
-    print("OK: data/expansion_gee.json generado correctamente.")
+    print(
+        f"OK: {final_file.relative_to(ROOT)} generado correctamente."
+    )
 
 
 if __name__ == "__main__":
